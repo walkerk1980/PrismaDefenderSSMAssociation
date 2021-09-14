@@ -1,0 +1,59 @@
+description: Manage Prisma Agent on EC2 instances
+schemaVersion: '0.3'
+assumeRole: '{{ AutomationAssumeRole }}'
+parameters:
+  Operation:
+    type: String
+  InstanceIds:
+    type: String
+  AutomationAssumeRole:
+    type: String
+mainSteps:
+  - name: get_token
+    action: aws:executeAwsApi
+    inputs:
+      Service: SecretsManager
+      Api: GetSecretValue
+      SecretId: 'arn:aws:secretsmanager:{{global:REGION}}:prisma_secret_account_placeholder:secret:prisma_secret_name_placeholder'
+      VersionStage: AWSCURRENT
+    outputs:
+      - Name: SecretString
+        Selector: '$.SecretString'
+        Type: String
+  - name: transform_token
+    action: aws:executeScript
+    inputs:
+      Runtime: python3.7
+      Handler: script_handler
+      InputPayload:
+        'parameter1': '{{get_token.SecretString}}'
+      Script: >
+        def script_handler(events, context):
+          import json
+          input_dict = json.loads(events.get('parameter1'))
+          print(input_dict.get('token'))
+  - name: transform_url
+    action: aws:executeScript
+    inputs:
+      Runtime: python3.7
+      Handler: script_handler
+      InputPayload:
+        'parameter1': '{{get_token.SecretString}}'
+      Script: >
+        def script_handler(events, context):
+          import json
+          input_dict = json.loads(events.get('parameter1'))
+          print(input_dict.get('console_url'))
+  - name: install_defender
+    action: 'aws:runCommand'
+    inputs:
+      DocumentName: 'ssm_command_placeholder'
+      Parameters:
+        Operation:
+          - Install
+        Token:
+          - '{{transform_token.OutputPayload}}'
+        ConsoleUrl:
+          - '{{transform_url.OutputPayload}}'
+      InstanceIds:
+        - '{{InstanceIds}}'

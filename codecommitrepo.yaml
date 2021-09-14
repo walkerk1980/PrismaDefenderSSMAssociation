@@ -1,0 +1,28 @@
+Parameters:
+  BusinessUnit:
+    Type: String
+  AppName:
+    Type: String
+  RepoDescription:
+    Type: String
+Resources:
+  codecommitrepo:
+    Type: AWS::CodeCommit::Repository
+    Properties:
+      RepositoryName: !Sub '${BusinessUnit}-${AppName}'
+      RepositoryDescription: !Sub '${RepoDescription}'
+Outputs:
+  GitRepoHTTPUrl:
+    Value:
+      Fn::GetAtt:
+      - codecommitrepo
+      - CloneUrlHttp
+    Export:
+      Name: !Sub '${BusinessUnit}-${AppName}-git-http-url'
+  GitRepoArn:
+    Value:
+      Fn::GetAtt:
+      - codecommitrepo
+      - Arn
+    Export:
+      Name: !Sub '${BusinessUnit}-${AppName}-git-repo-arn'

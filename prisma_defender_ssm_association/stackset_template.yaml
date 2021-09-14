@@ -1,0 +1,130 @@
+AWSTemplateFormatVersion: 2010-09-09
+Description: 'SSM Document for Prisma Defender deployment to EC2 Instances'
+Parameters:
+  BusinessUnitName:
+    Type: String
+  DeploymentVersion:
+    Type: String
+  PrismaSecretName:
+    Type: String
+  SecretAccount:
+    Type: String
+Resources:
+  SSMCommandToInstallPrismaDefender:
+    Type: AWS::SSM::Document
+    Properties: 
+      DocumentType: Command
+      Name: !Sub '${BusinessUnitName}-Prisma-ManageDefender-${DeploymentVersion}'
+      Content:
+        description: Manage AWS Agent on EC2 instances
+        parameters:
+          Operation:
+            type: String
+            description: '(Required) The AWS Agent related action to perform. The install operation installs the Prisma Defender on the System'
+            allowedValues:
+              - Install
+          Token:
+            type: String
+            description: '(Required) The auth token'
+          ConsoleUrl:
+            type: String
+            description: '(Required) The console Url for tenant'
+        #platformTypes:
+        #  - Windows
+        #  - Linux
+        schemaVersion: '2.2'
+        mainSteps:
+          - action: aws:runShellScript
+            name: InstallPrismaDefenderLinux
+            precondition:
+              StringEquals: [ platformType, Linux ]
+            inputs:
+              runCommand:
+                - '#!/bin/bash'
+                - 'export SECURE_TMP_DIR=$(mktemp -d /tmp/awsagent.XXXXXXXX)'
+                - 'cd $SECURE_TMP_DIR'
+                - 'export PRISMA_TOKEN="{{Token}}"'
+                - 'export PRISMA_CONSOLE_URL="{{ConsoleUrl}}"'
+                # - 'export CRI='--cri'
+                # - 'export SELINUX='--selinux-enabled'
+                # - 'export PRIVILEGED='--privileged'
+                - 'export K8S_COMMAND="if [[ ! -f ./twistcli || $(./twistcli --version) != *"20.09.366"* ]]; then curl --progress-bar -L -k --header \"authorization: Bearer ${PRISMA_TOKEN}\" https://${PRISMA_CONSOLE_URL}/api/v1/util/twistcli > twistcli; chmod +x twistcli; fi; ./twistcli defender install kubernetes --namespace twistlock \"${PRIVILEGED}\" \"${CRI}\" --monitor-service-accounts --token \"${PRISMA_TOKEN}\" --address https://${PRISMA_CONSOLE_URL} --cluster-address us-west1.cloud.twistlock.com \"${SELINUX}\""'
+                # - 'export K8S_COMMAND="exit 0"'
+                - 'export INSTALL_COMMAND="curl -sSL -k --header \"authorization: Bearer ${PRISMA_TOKEN}\" -X POST https://${PRISMA_CONSOLE_URL}/api/v1/scripts/defender.sh | sudo /bin/bash -s -- -c \"us-west1.cloud.twistlock.com\" -d \"none\" "'
+                - 'export DOCKER_COMMAND="${INSTALL_COMMAND}"'
+                - 'export HOST_COMMAND="${INSTALL_COMMAND} --install-host"'
+                - 'if [ ! $(which curl) ];then echo "curl not installed";export CURL_INSTALL="true"; (sudo yum install curl || sudo apt install curl); fi'
+                # - 'if [ $(which kubectl) ];then echo "kubectl is installed"; eval $K8S_COMMAND && if [ "${CURL_INSTALL}" == "true" ];then echo "cleaning up curl"; (sudo yum remove curl || sudo apt remove curl); fi && exit 0; fi'
+                - 'if [ $(which docker) ];then echo "docker is installed"; eval $DOCKER_COMMAND && if [ "${CURL_INSTALL}" == "true" ];then echo "cleaning up curl"; (sudo yum remove curl || sudo apt remove curl); fi && exit 0; fi'
+                - 'eval $HOST_COMMAND && if [ "${CURL_INSTALL}" == "true" ];then echo "cleaning up curl"; (sudo yum remove curl || sudo apt remove curl); fi && exit 0 || exit 6'
+          - action: aws:runPowerShellScript
+            name: InstallPrismaDefenderWindows
+            precondition:
+              StringEquals: [ platformType, Windows ]
+            inputs:
+              runCommand:
+                - '$PRISMA_TOKEN="{{Token}}"'
+                - '$PRISMA_CONSOLE_URL="{{ConsoleUrl}}"'
+                - 'add-type "using System.Net; using System.Security.Cryptography.X509Certificates; public class TrustAllCertsPolicy : ICertificatePolicy{ public bool CheckValidationResult(ServicePoint srvPoint, X509Certificate certificate, WebRequest request, int certificateProblem) { return true; }}"; [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12; [System.Net.ServicePointManager]::CertificatePolicy = New-Object TrustAllCertsPolicy; Invoke-WebRequest -Uri "https://${PRISMA_CONSOLE_URL}/api/v1/scripts/defender.ps1" -Method Post -Headers @{"authorization" = "Bearer ${PRISMA_TOKEN}" } -OutFile defender.ps1; .\defender.ps1 -type serverWindows -consoleCN us-west1.cloud.twistlock.com -install'
+                - 'exit 0'
+  SSMAutomationToRunCommand:
+    Type: AWS::SSM::Document
+    Properties: 
+      DocumentType: Automation
+      Name: !Sub '${BusinessUnitName}-Prisma-DefenderAutomation-${DeploymentVersion}'
+      Content:
+        description: Manage AWS Agent on EC2 instances
+        schemaVersion: '0.3'
+        assumeRole: '{{ AutomationAssumeRole }}'
+        parameters:
+          Operation:
+            InstanceIds:
+              type: String
+            AutomationAssumeRole:
+              type: String
+        mainSteps:
+          - name: get_token
+            action: 'aws:executeAwsApi'
+            inputs:
+              Service: SecretsManager
+              Api: GetSecretValue
+              SecretId: !Sub 'arn:aws:secretsmanager:{{global:REGION}}:${SecretAccount}:secret:${PrismaSecretName}'
+              VersionStage: TOKEN
+            outputs:
+              Token:
+                Type: String
+                Selector: '$.SecretString'
+              ConsoleUrl:
+                Type: String
+                Selector: '$.SecretString'
+          - name: install_defender
+            action: 'aws:runCommand'
+            inputs:
+              DocumentName: !Ref SSMCommandToInstallPrismaDefender
+              Operation:
+                - Install
+              Token:
+                - 'example_token'
+              ConsoleUrl:
+                - 'example_url'
+  SystemAssociationForPrismaDefender:
+    Type: AWS::SSM::Association
+    Properties:
+      ApplyOnlyAtCronInterval: false
+      AssociationName: !Sub '${BusinessUnitName}-SystemAssociationForPrismaDefender'
+      AutomationTargetParameterName: InstanceId
+      ComplianceSeverity: UNSPECIFIED
+      Name: !Ref SSMAutomationToRunCommand
+      DocumentVersion: $DEFAULT
+      Parameters:
+        Operation:
+          - Install
+        Token:
+          - 'example_token'
+        ConsoleUrl:
+          - 'example_url'
+      ScheduleExpression: rate(30 minutes)
+      Targets: 
+        - Key: InstanceIds
+          Values:
+            - '*'

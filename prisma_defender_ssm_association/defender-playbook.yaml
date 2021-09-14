@@ -1,0 +1,25 @@
+---
+
+- hosts: 127.0.0.1
+  connection: local
+  become: true
+
+  tasks:
+    - name: Create Installation Directory
+      file: dest=/var/tmp/.twistlock state=directory
+
+    - name: "download file"
+      uri:
+        url: "https://{{PRISMA_CONSOLE_URL}}/api/v1/scripts/defender.sh"
+        method: POST
+        headers:
+           "authorization": Bearer {{PRISMA_TOKEN}}
+        dest: /var/tmp/.twistlock/defender.sh
+        return_content: yes
+        validate_certs: false
+
+    - name: make that executable
+      file: dest=/var/tmp/.twistlock/defender.sh mode=0755 state=file
+
+    - name: run the script
+      command: /var/tmp/.twistlock/defender.sh -d "none" --install-host  -c "{{PRISMA_CONSOLE_URL}}"
